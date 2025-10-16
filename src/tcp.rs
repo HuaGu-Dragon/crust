@@ -66,8 +66,9 @@ impl TcpState {
                     syn_ack.write(&mut unwritten).unwrap();
                     unwritten.len()
                 };
+                let n = nic.send(&buf[..unwritten])?;
                 *self = TcpState::SynRcv;
-                nic.send(&buf[..unwritten])
+                Ok(n)
             }
             TcpState::SynRcv => todo!(),
             TcpState::Established => todo!(),
