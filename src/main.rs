@@ -51,7 +51,7 @@ fn main() -> Result<(), io::Error> {
                                     dst: (dst, tcp_h.destination_port()),
                                 })
                                 .or_default()
-                                .on_packet(iph, tcp_h, data);
+                                .on_packet(&dev, iph, tcp_h, data)?;
                         }
                         Err(e) => {
                             eprintln!("ignoring non-TCP packet: {:?}", e);
