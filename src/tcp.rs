@@ -79,7 +79,7 @@ impl Connection {
             },
             recv: RecvSequenceSpace {
                 irs: tcp_header.sequence_number(),
-                nxt: tcp_header.sequence_number(),
+                nxt: tcp_header.sequence_number() + 1,
                 wnd: tcp_header.window_size(),
                 up: false,
             },
@@ -103,6 +103,11 @@ impl Connection {
             iph.source(),
         )
         .unwrap();
+
+        // syn_ack.checksum = syn_ack
+        //     .calc_checksum_ipv4(&ip, &[])
+        //     .expect("failed to compute checksum");
+
         let mut buf = [0u8; 1500];
 
         let unwritten = {
@@ -111,7 +116,7 @@ impl Connection {
             syn_ack.write(&mut unwritten).unwrap();
             unwritten.len()
         };
-        nic.send(&buf[..unwritten])?;
+        nic.send(&buf[..buf.len() - unwritten])?;
         Ok(Some(c))
     }
     pub fn on_packet(
