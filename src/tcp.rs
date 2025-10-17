@@ -2,7 +2,6 @@ use etherparse::{IpNumber, Ipv4Header, Ipv4HeaderSlice, TcpHeader, TcpHeaderSlic
 use tun::Device;
 
 enum State {
-    Closed,
     Listen,
     SynRcv,
     Established,
@@ -104,9 +103,9 @@ impl Connection {
         )
         .unwrap();
 
-        // syn_ack.checksum = syn_ack
-        //     .calc_checksum_ipv4(&ip, &[])
-        //     .expect("failed to compute checksum");
+        syn_ack.checksum = syn_ack
+            .calc_checksum_ipv4(&ip, &[])
+            .expect("failed to compute checksum");
 
         let mut buf = [0u8; 1500];
 
