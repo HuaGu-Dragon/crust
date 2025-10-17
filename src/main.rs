@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, hash_map::Entry},
     io::{self},
     net::Ipv4Addr,
 };
@@ -25,7 +25,7 @@ fn main() -> Result<(), io::Error> {
     let dev = tun::create(&config)?;
     let mut buf = [0u8; 1500];
 
-    let mut connections = HashMap::<Quad, tcp::TcpState>::new();
+    let mut connections = HashMap::<Quad, tcp::Connection>::new();
 
     loop {
         let n = dev.recv(&mut buf)?;
@@ -45,13 +45,21 @@ fn main() -> Result<(), io::Error> {
                     match etherparse::TcpHeaderSlice::from_slice(&buf[iph.slice().len()..n]) {
                         Ok(tcp_h) => {
                             let data = &buf[iph.slice().len() + tcp_h.slice().len()..n];
-                            connections
-                                .entry(Quad {
-                                    src: (src, tcp_h.source_port()),
-                                    dst: (dst, tcp_h.destination_port()),
-                                })
-                                .or_default()
-                                .on_packet(&dev, iph, tcp_h, data)?;
+                            match connections.entry(Quad {
+                                src: (src, tcp_h.source_port()),
+                                dst: (dst, tcp_h.destination_port()),
+                            }) {
+                                Entry::Occupied(mut occupied_entry) => {
+                                    occupied_entry.get_mut().on_packet(&dev, iph, tcp_h, data)?;
+                                }
+                                Entry::Vacant(vacant_entry) => {
+                                    if let Some(connection) =
+                                        tcp::Connection::accept(&dev, iph, tcp_h, data)?
+                                    {
+                                        vacant_entry.insert(connection);
+                                    }
+                                }
+                            }
                         }
                         Err(e) => {
                             eprintln!("ignoring non-TCP packet: {:?}", e);
