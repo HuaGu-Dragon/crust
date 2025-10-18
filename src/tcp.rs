@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use etherparse::{IpNumber, Ipv4Header, Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use tun::Device;
 
@@ -20,6 +22,7 @@ pub struct Connection {
     send: SendSequenceSpace,
     recv: RecvSequenceSpace,
     iph: Ipv4Header,
+    tcp: TcpHeader,
 }
 
 struct SendSequenceSpace {
@@ -74,13 +77,14 @@ impl Connection {
         }
 
         let iss = 0;
+        let wnd = 10;
         let mut c = Connection {
             state: State::SynRcv,
             send: SendSequenceSpace {
                 iss,
                 una: iss,
-                nxt: iss + 1,
-                wnd: 10,
+                nxt: iss,
+                wnd,
                 up: false,
                 wl1: 0,
                 wl2: 0,
@@ -92,34 +96,18 @@ impl Connection {
                 up: false,
             },
             iph: Ipv4Header::new(0, 64, IpNumber::TCP, iph.destination(), iph.source()).unwrap(),
+            tcp: TcpHeader::new(
+                tcp_header.destination_port(),
+                tcp_header.source_port(),
+                iss, // TODO: use random sequence number
+                wnd,
+            ),
         };
 
-        let mut syn_ack = TcpHeader::new(
-            tcp_header.destination_port(),
-            tcp_header.source_port(),
-            c.send.iss, // TODO: use random sequence number
-            c.send.wnd,
-        );
-        syn_ack.acknowledgment_number = c.recv.nxt;
-        syn_ack.syn = true;
-        syn_ack.ack = true;
-        c.iph
-            .set_payload_len(syn_ack.header_len())
-            .expect("Failed to set payload len");
+        c.tcp.syn = true;
+        c.tcp.ack = true;
+        c.write(nic, &[])?;
 
-        syn_ack.checksum = syn_ack
-            .calc_checksum_ipv4(&c.iph, &[])
-            .expect("failed to compute checksum");
-
-        let mut buf = [0u8; 1500];
-
-        let unwritten = {
-            let mut unwritten = &mut buf[..];
-            c.iph.write(&mut unwritten).unwrap();
-            syn_ack.write(&mut unwritten).unwrap();
-            unwritten.len()
-        };
-        nic.send(&buf[..buf.len() - unwritten])?;
         Ok(Some(c))
     }
     pub fn on_packet(
@@ -135,7 +123,7 @@ impl Connection {
             self.send.nxt.wrapping_add(1),
         ) {
             if !self.state.is_synchronized() {
-                // TODO: send a RST packet
+                self.send_rst(nic)?;
             }
             return Ok(());
         };
@@ -168,7 +156,6 @@ impl Connection {
         }
 
         match self.state {
-            State::Listen => todo!(),
             State::SynRcv => {
                 if !tcp_header.ack() {
                     return Ok(());
@@ -177,6 +164,53 @@ impl Connection {
             }
             State::Established => todo!(),
         }
+    }
+
+    fn write(&mut self, nic: &Device, payload: &[u8]) -> std::io::Result<usize> {
+        let mut buf = [0u8; 1500];
+
+        self.tcp.sequence_number = self.send.nxt;
+        self.tcp.acknowledgment_number = self.recv.nxt;
+        let size = buf.len().min(self.tcp.header_len() + payload.len());
+        self.iph
+            .set_payload_len(size)
+            .expect("Failed to set payload len");
+
+        let mut unwritten = &mut buf[..];
+        self.iph.write(&mut unwritten)?;
+        self.tcp.write(&mut unwritten)?;
+        let n = unwritten.write(payload)?;
+        let unwritten = unwritten.len();
+
+        self.tcp.checksum = self
+            .tcp
+            .calc_checksum_ipv4(&self.iph, &payload[..n])
+            .expect("failed to compute checksum");
+
+        self.send.nxt = self.send.nxt.wrapping_add(n as u32);
+        if self.tcp.syn {
+            self.send.nxt = self.send.nxt.wrapping_add(1);
+            self.tcp.syn = false;
+        }
+        if self.tcp.fin {
+            self.send.nxt = self.send.nxt.wrapping_add(1);
+            self.tcp.fin = false;
+        }
+
+        nic.send(&buf[..buf.len() - unwritten])?;
+        Ok(n)
+    }
+
+    fn send_rst(&mut self, nic: &Device) -> std::io::Result<()> {
+        self.tcp.rst = true;
+        // TODO: fix sequencee number here
+        // TODO: handle synchronized RST
+        self.tcp.sequence_number = 0;
+        self.tcp.acknowledgment_number = 0;
+        self.write(nic, &[])?;
+        // TODO: Does it needed?
+        // self.tcp.rst = false;
+        Ok(())
     }
 }
 
