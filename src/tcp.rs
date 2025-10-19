@@ -85,7 +85,7 @@ impl Connection {
         }
 
         let iss = 0;
-        let wnd = 10;
+        let wnd = 1024;
         let mut c = Connection {
             state: State::SynRcv,
             send: SendSequenceSpace {
@@ -218,16 +218,16 @@ impl Connection {
             .set_payload_len(size - self.iph.header_len())
             .expect("Failed to set payload len");
 
+        self.tcp.checksum = self
+            .tcp
+            .calc_checksum_ipv4(&self.iph, payload) // TODO: what if payload too large?
+            .expect("failed to compute checksum");
+
         let mut unwritten = &mut buf[..];
         self.iph.write(&mut unwritten)?;
         self.tcp.write(&mut unwritten)?;
         let n = unwritten.write(payload)?;
         let unwritten = unwritten.len();
-
-        self.tcp.checksum = self
-            .tcp
-            .calc_checksum_ipv4(&self.iph, &payload[..n])
-            .expect("failed to compute checksum");
 
         self.send.nxt = self.send.nxt.wrapping_add(n as u32);
         if self.tcp.syn {
@@ -263,6 +263,6 @@ where
     match start.cmp(&end) {
         std::cmp::Ordering::Less => !(end >= start && end <= x),
         std::cmp::Ordering::Equal => false,
-        std::cmp::Ordering::Greater => end < start && end > x,
+        std::cmp::Ordering::Greater => end < start || end > x,
     }
 }
