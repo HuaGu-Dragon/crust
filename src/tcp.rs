@@ -6,13 +6,21 @@ use tun::Device;
 enum State {
     SynRcv,
     Established,
+    FinWait1,
+    FinWait2,
+    Closing,
+    TimeWait,
 }
 
 impl State {
     fn is_synchronized(&self) -> bool {
         match self {
             State::SynRcv => false,
-            State::Established => true,
+            State::Established
+            | State::FinWait1
+            | State::FinWait2
+            | Self::TimeWait
+            | Self::Closing => true,
         }
     }
 }
@@ -117,16 +125,6 @@ impl Connection {
         tcp_header: TcpHeaderSlice,
         payload: &[u8],
     ) -> Result<(), std::io::Error> {
-        if !between_wrapping(
-            self.send.una,
-            tcp_header.acknowledgment_number(),
-            self.send.nxt.wrapping_add(1),
-        ) {
-            if !self.state.is_synchronized() {
-                self.send_rst(nic)?;
-            }
-            return Ok(());
-        };
         let start = self.recv.nxt.wrapping_sub(1);
         let seqn = tcp_header.sequence_number();
         let end = self.recv.nxt.wrapping_add(self.recv.wnd as u32);
@@ -137,33 +135,74 @@ impl Connection {
         if tcp_header.syn() {
             n += 1;
         }
-        if n == 0 {
+        let is_valid = if n == 0 {
             if self.recv.wnd == 0 {
-                if seqn != self.recv.nxt {
-                    return Ok(());
-                }
-            } else if !between_wrapping(start, seqn, end) {
-                return Ok(());
+                seqn == self.recv.nxt
+            } else {
+                between_wrapping(start, seqn, end)
             }
+        } else if self.recv.wnd == 0 {
+            false
         } else {
-            if self.recv.wnd == 0 {
-                return Ok(());
-            } else if !between_wrapping(start, seqn, end)
-                && !between_wrapping(start, seqn.wrapping_add(n - 1), end)
-            {
-                return Ok(());
+            between_wrapping(start, seqn, end)
+                || between_wrapping(start, seqn.wrapping_add(n - 1), end)
+        };
+
+        if !is_valid {
+            return Ok(());
+        }
+        self.recv.nxt = seqn.wrapping_add(n);
+
+        if !tcp_header.ack() {
+            return Ok(());
+        }
+
+        if let State::SynRcv = self.state {
+            if between_wrapping(
+                self.send.una.wrapping_add(1),
+                tcp_header.acknowledgment_number(),
+                self.send.nxt.wrapping_add(1),
+            ) {
+                self.state = State::Established;
+            } else {
+                // TODO: RST
             }
         }
 
-        match self.state {
-            State::SynRcv => {
-                if !tcp_header.ack() {
-                    return Ok(());
-                }
-                todo!()
+        if let State::Established | State::FinWait1 | State::FinWait2 = self.state {
+            if !between_wrapping(
+                self.send.una,
+                tcp_header.acknowledgment_number(),
+                self.send.nxt.wrapping_add(1),
+            ) {
+                return Ok(());
             }
-            State::Established => todo!(),
+            self.send.una = tcp_header.acknowledgment_number();
+
+            if let State::Established = self.state {
+                self.tcp.fin = true;
+                self.write(nic, &[])?;
+                self.state = State::FinWait1;
+            }
         }
+
+        if let State::FinWait1 = self.state {
+            if self.send.una == self.send.iss + 2 {
+                self.state = State::FinWait2;
+            }
+        }
+        if tcp_header.fin() {
+            match self.state {
+                State::FinWait2 => {
+                    // we're done with the connection!
+                    self.write(nic, &[])?;
+                    self.state = State::TimeWait;
+                }
+                _ => unimplemented!(),
+            }
+        }
+
+        Ok(())
     }
 
     fn write(&mut self, nic: &Device, payload: &[u8]) -> std::io::Result<usize> {
@@ -171,9 +210,12 @@ impl Connection {
 
         self.tcp.sequence_number = self.send.nxt;
         self.tcp.acknowledgment_number = self.recv.nxt;
-        let size = buf.len().min(self.tcp.header_len() + payload.len());
+
+        let size = buf
+            .len()
+            .min(self.iph.header_len() + self.tcp.header_len() + payload.len());
         self.iph
-            .set_payload_len(size)
+            .set_payload_len(size - self.iph.header_len())
             .expect("Failed to set payload len");
 
         let mut unwritten = &mut buf[..];
