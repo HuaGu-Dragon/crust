@@ -1,4 +1,7 @@
-use std::io::Write;
+use std::{
+    io::Write,
+    ops::{Add, AddAssign},
+};
 
 use etherparse::{IpNumber, Ipv4Header, Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use tun::Device;
@@ -256,13 +259,13 @@ impl Connection {
     }
 }
 
-fn between_wrapping<T>(start: T, x: T, end: T) -> bool
+fn wrapping_it(lhs: u32, rhs: u32) -> bool {
+    lhs.wrapping_add(rhs) > (1 << 31)
+}
+
+fn between_wrapping(start: u32, x: u32, end: u32) -> bool
 where
-    T: PartialOrd + Ord,
+    u32: PartialOrd + Ord,
 {
-    match start.cmp(&end) {
-        std::cmp::Ordering::Less => !(end >= start && end <= x),
-        std::cmp::Ordering::Equal => false,
-        std::cmp::Ordering::Greater => end < start || end > x,
-    }
+    wrapping_it(start, x) && wrapping_it(x, end)
 }
