@@ -4,9 +4,8 @@ use std::{
     net::Ipv4Addr,
 };
 
+use crust::tcp::Connection;
 use etherparse::IpNumber;
-
-mod tcp;
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Copy)]
 struct Quad {
@@ -25,7 +24,7 @@ fn main() -> Result<(), io::Error> {
     let dev = tun::create(&config)?;
     let mut buf = [0u8; 1500];
 
-    let mut connections = HashMap::<Quad, tcp::Connection>::new();
+    let mut connections = HashMap::<Quad, Connection>::new();
 
     loop {
         let n = dev.recv(&mut buf)?;
@@ -54,7 +53,7 @@ fn main() -> Result<(), io::Error> {
                                 }
                                 Entry::Vacant(vacant_entry) => {
                                     if let Some(connection) =
-                                        tcp::Connection::accept(&dev, iph, tcp_h, data)?
+                                        Connection::accept(&dev, iph, tcp_h, data)?
                                     {
                                         vacant_entry.insert(connection);
                                     }
