@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     io::Write,
     ops::{Add, AddAssign},
 };
@@ -34,6 +35,9 @@ pub struct Connection {
     recv: RecvSequenceSpace,
     iph: Ipv4Header,
     tcp: TcpHeader,
+
+    pub incomming: VecDeque<u8>,
+    pub unacked: VecDeque<u8>,
 }
 
 struct SendSequenceSpace {
@@ -113,6 +117,8 @@ impl Connection {
                 iss, // TODO: use random sequence number
                 wnd,
             ),
+            incomming: VecDeque::new(),
+            unacked: VecDeque::new(),
         };
 
         c.tcp.syn = true;

@@ -81,7 +81,25 @@ impl Read for TcpStream {
                 "stream was terminated unexpectedly",
             )
         })?;
-        todo!()
+
+        if conn.incomming.is_empty() {
+            // TODO: block
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "no bytes to read.",
+            ));
+        }
+
+        let mut nread = 0;
+        let (head, tail) = conn.incomming.as_slices();
+        let hread = std::cmp::min(head.len(), buf.len());
+        buf[..hread].copy_from_slice(&head[..hread]);
+        nread += hread;
+        let tread = std::cmp::min(tail.len(), buf.len() - nread);
+        buf[..nread].copy_from_slice(&tail[..tread]);
+        nread += tread;
+        drop(conn.incomming.drain(..nread));
+        Ok(nread)
     }
 }
 
