@@ -10,6 +10,8 @@ use tun::Device;
 
 pub mod tcp;
 
+const SENDQUEUE_SIZE: usize = 1024;
+
 type InterfaceHandle = Arc<Mutex<ConnectionManager>>;
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Copy)]
@@ -105,7 +107,28 @@ impl Read for TcpStream {
 
 impl Write for TcpStream {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        todo!()
+        let mut ih = self.1.lock().unwrap();
+        let conn = ih.connection.get_mut(&self.0).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "stream was terminated unexpectedly",
+            )
+        })?;
+
+        if conn.unacked.len() >= SENDQUEUE_SIZE {
+            // TODO: block
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "too many bytes buffered",
+            ));
+        }
+
+        let nwrite = std::cmp::min(buf.len(), SENDQUEUE_SIZE - conn.unacked.len());
+        conn.unacked.extend(&buf[..nwrite]);
+
+        // TODO: wake up writer
+
+        Ok(nwrite)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
