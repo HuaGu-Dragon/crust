@@ -132,7 +132,19 @@ impl Write for TcpStream {
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        todo!()
+        let mut ih = self.1.lock().unwrap();
+        let conn = ih.connection.get_mut(&self.0).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "stream was terminated unexpectedly",
+            )
+        })?;
+
+        if conn.unacked.is_empty() {
+            Ok(())
+        } else {
+            unimplemented!()
+        }
     }
 }
 
