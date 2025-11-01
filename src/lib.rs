@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque, hash_map::Entry},
     io::{self, Read, Write},
-    net::Ipv4Addr,
+    net::{Ipv4Addr, Shutdown},
     sync::{Arc, Mutex},
     thread,
 };
@@ -161,5 +161,9 @@ impl TcpListener {
                 "no connections available",
             ))
         }
+    }
+
+    pub fn shutdown(&self, how: Shutdown) -> io::Result<()> {
+        unimplemented!()
     }
 }
