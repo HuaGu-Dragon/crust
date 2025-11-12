@@ -16,12 +16,12 @@ fn main() -> Result<(), io::Error> {
     let mut l1 = i.bind(8000)?;
     let mut l2 = i.bind(8001)?;
     let jh1 = std::thread::spawn(move || {
-        while let Ok(stream) = l1.accept() {
+        while let Ok(_stream) = l1.accept() {
             println!("Got connection from 8000");
         }
     });
     let jh2 = std::thread::spawn(move || {
-        while let Ok(stream) = l2.accept() {
+        while let Ok(_stream) = l2.accept() {
             println!("Got connection from 8001");
         }
     });

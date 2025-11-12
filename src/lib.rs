@@ -40,7 +40,7 @@ pub struct ConnectionManager {
     pending: HashMap<u16, VecDeque<Quad>>,
 }
 
-fn packet_loop(mut ih: InterfaceHandle, nic: Device) -> std::io::Result<()> {
+fn packet_loop(ih: InterfaceHandle, nic: Device) -> std::io::Result<()> {
     let mut buf = [0u8; 1500];
 
     loop {

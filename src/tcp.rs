@@ -1,8 +1,4 @@
-use std::{
-    collections::VecDeque,
-    io::Write,
-    ops::{Add, AddAssign},
-};
+use std::{collections::VecDeque, io::Write};
 
 use etherparse::{IpNumber, Ipv4Header, Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use tun::Device;
