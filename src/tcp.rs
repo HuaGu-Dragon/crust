@@ -36,8 +36,8 @@ pub struct Connection {
     iph: Ipv4Header,
     tcp: TcpHeader,
 
-    pub incomming: VecDeque<u8>,
-    pub unacked: VecDeque<u8>,
+    pub(crate) incomming: VecDeque<u8>,
+    pub(crate) unacked: VecDeque<u8>,
 }
 
 struct SendSequenceSpace {
@@ -117,8 +117,8 @@ impl Connection {
                 iss, // TODO: use random sequence number
                 wnd,
             ),
-            incomming: VecDeque::new(),
-            unacked: VecDeque::new(),
+            incomming: Default::default(),
+            unacked: Default::default(),
         };
 
         c.tcp.syn = true;

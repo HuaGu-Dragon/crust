@@ -6,7 +6,10 @@ use std::{
     thread,
 };
 
+use etherparse::IpNumber;
 use tun::Device;
+
+use crate::tcp::Connection;
 
 pub mod tcp;
 
@@ -22,13 +25,80 @@ struct Quad {
 
 pub struct Interface {
     ih: InterfaceHandle,
-    jh: thread::JoinHandle<()>,
+    jh: thread::JoinHandle<std::io::Result<()>>,
+}
+
+impl Drop for Interface {
+    fn drop(&mut self) {
+        unimplemented!()
+    }
 }
 
 #[derive(Default)]
 pub struct ConnectionManager {
     connection: HashMap<Quad, tcp::Connection>,
     pending: HashMap<u16, VecDeque<Quad>>,
+}
+
+fn packet_loop(mut ih: InterfaceHandle, nic: Device) -> std::io::Result<()> {
+    let mut buf = [0u8; 1500];
+
+    loop {
+        let n = nic.recv(&mut buf)?;
+        match etherparse::Ipv4HeaderSlice::from_slice(&buf[..n]) {
+            Ok(iph) => {
+                let src = iph.source_addr();
+                let dst = iph.destination_addr();
+                println!(
+                    "Received packet: {} -> {}, protocol: {:?}, length: {}",
+                    src,
+                    dst,
+                    iph.protocol(),
+                    iph.total_len()
+                );
+
+                if iph.protocol() == IpNumber::TCP {
+                    match etherparse::TcpHeaderSlice::from_slice(&buf[iph.slice().len()..n]) {
+                        Ok(tcp_h) => {
+                            let data = &buf[iph.slice().len() + tcp_h.slice().len()..n];
+                            let mut cm = ih.lock().unwrap();
+                            let cm = &mut *cm;
+                            let q = Quad {
+                                src: (src, tcp_h.source_port()),
+                                dst: (dst, tcp_h.destination_port()),
+                            };
+                            match cm.connection.entry(q) {
+                                Entry::Occupied(mut occupied_entry) => {
+                                    occupied_entry.get_mut().on_packet(&nic, iph, tcp_h, data)?;
+                                }
+                                Entry::Vacant(vacant_entry) => {
+                                    if let Some(pending) =
+                                        cm.pending.get_mut(&tcp_h.destination_port())
+                                        && let Some(connection) =
+                                            Connection::accept(&nic, iph, tcp_h, data)?
+                                    {
+                                        vacant_entry.insert(connection);
+                                        pending.push_back(q);
+
+                                        // TODO: wake up pending connections
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("ignoring non-TCP packet: {:?}", e);
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            Err(e) => {
+                eprintln!("Failed to parse IPv4 header: {:?}", e);
+                continue;
+            }
+        }
+    }
 }
 
 impl Interface {
@@ -44,11 +114,7 @@ impl Interface {
         let ih: InterfaceHandle = Arc::default();
         let jh = {
             let handle = ih.clone();
-            thread::spawn(move || {
-                let nic = nic;
-                let handle = handle;
-                let buf = [0u8; 1500];
-            })
+            thread::spawn(move || packet_loop(handle, nic))
         };
 
         Ok(Self { ih, jh })
@@ -68,16 +134,28 @@ impl Interface {
             }
         }
         drop(ih);
-        Ok(TcpListener(port, self.ih.clone()))
+        Ok(TcpListener {
+            port,
+            h: self.ih.clone(),
+        })
     }
 }
 
-pub struct TcpStream(Quad, InterfaceHandle);
+pub struct TcpStream {
+    quad: Quad,
+    h: InterfaceHandle,
+}
+
+impl Drop for TcpStream {
+    fn drop(&mut self) {
+        unimplemented!()
+    }
+}
 
 impl Read for TcpStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let mut ih = self.1.lock().unwrap();
-        let conn = ih.connection.get_mut(&self.0).ok_or_else(|| {
+        let mut ih = self.h.lock().unwrap();
+        let conn = ih.connection.get_mut(&self.quad).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::ConnectionAborted,
                 "stream was terminated unexpectedly",
@@ -107,8 +185,8 @@ impl Read for TcpStream {
 
 impl Write for TcpStream {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut ih = self.1.lock().unwrap();
-        let conn = ih.connection.get_mut(&self.0).ok_or_else(|| {
+        let mut ih = self.h.lock().unwrap();
+        let conn = ih.connection.get_mut(&self.quad).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::ConnectionAborted,
                 "stream was terminated unexpectedly",
@@ -132,8 +210,8 @@ impl Write for TcpStream {
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        let mut ih = self.1.lock().unwrap();
-        let conn = ih.connection.get_mut(&self.0).ok_or_else(|| {
+        let mut ih = self.h.lock().unwrap();
+        let conn = ih.connection.get_mut(&self.quad).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::ConnectionAborted,
                 "stream was terminated unexpectedly",
@@ -148,13 +226,25 @@ impl Write for TcpStream {
     }
 }
 
-pub struct TcpListener(u16, InterfaceHandle);
+pub struct TcpListener {
+    port: u16,
+    h: InterfaceHandle,
+}
+
+impl Drop for TcpListener {
+    fn drop(&mut self) {
+        unimplemented!()
+    }
+}
 
 impl TcpListener {
     pub fn accept(&mut self) -> io::Result<TcpStream> {
-        let mut ih = self.1.lock().unwrap();
-        if let Some(quad) = ih.pending.get_mut(&self.0).unwrap().pop_front() {
-            Ok(TcpStream(quad, self.1.clone()))
+        let mut ih = self.h.lock().unwrap();
+        if let Some(quad) = ih.pending.get_mut(&self.port).unwrap().pop_front() {
+            Ok(TcpStream {
+                quad,
+                h: self.h.clone(),
+            })
         } else {
             Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
