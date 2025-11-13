@@ -24,18 +24,22 @@ struct Quad {
 }
 
 pub struct Interface {
-    ih: InterfaceHandle,
-    jh: thread::JoinHandle<std::io::Result<()>>,
+    ih: Option<InterfaceHandle>,
+    jh: Option<thread::JoinHandle<std::io::Result<()>>>,
 }
 
 impl Drop for Interface {
     fn drop(&mut self) {
-        unimplemented!()
+        self.ih.as_mut().unwrap().lock().unwrap().terminate = true;
+
+        drop(self.ih.take());
+        self.jh.take().unwrap().join().unwrap().unwrap();
     }
 }
 
 #[derive(Default)]
 pub struct ConnectionManager {
+    terminate: bool,
     connection: HashMap<Quad, tcp::Connection>,
     pending: HashMap<u16, VecDeque<Quad>>,
 }
@@ -117,11 +121,14 @@ impl Interface {
             thread::spawn(move || packet_loop(handle, nic))
         };
 
-        Ok(Self { ih, jh })
+        Ok(Self {
+            ih: Some(ih),
+            jh: Some(jh),
+        })
     }
 
     pub fn bind(&mut self, port: u16) -> io::Result<TcpListener> {
-        let mut ih = self.ih.lock().unwrap();
+        let mut ih = self.ih.as_mut().unwrap().lock().unwrap();
         match ih.pending.entry(port) {
             Entry::Occupied(mut occupied_entry) => {
                 occupied_entry.insert(VecDeque::new());
@@ -136,7 +143,7 @@ impl Interface {
         drop(ih);
         Ok(TcpListener {
             port,
-            h: self.ih.clone(),
+            h: self.ih.as_ref().unwrap().clone(),
         })
     }
 }
@@ -148,7 +155,10 @@ pub struct TcpStream {
 
 impl Drop for TcpStream {
     fn drop(&mut self) {
-        unimplemented!()
+        let mut cm = self.h.lock().unwrap();
+        if let Some(c) = cm.connection.remove(&self.quad) {
+            // TODO: send FIN packet on cm.connections[quad]
+        }
     }
 }
 
@@ -233,7 +243,15 @@ pub struct TcpListener {
 
 impl Drop for TcpListener {
     fn drop(&mut self) {
-        unimplemented!()
+        let mut cm = self.h.lock().unwrap();
+        let pending = cm
+            .pending
+            .remove(&self.port)
+            .expect("port closed while listener still active");
+
+        for quad in pending {
+            // TODO: terminate all the connections
+        }
     }
 }
 
