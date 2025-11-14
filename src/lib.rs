@@ -79,18 +79,14 @@ fn packet_loop(ih: InterfaceHandle, nic: Device) -> std::io::Result<()> {
                             };
                             match cm.connection.entry(q) {
                                 Entry::Occupied(mut occupied_entry) => {
-                                    println!("receive");
                                     occupied_entry.get_mut().on_packet(&nic, iph, tcp_h, data)?;
                                 }
                                 Entry::Vacant(vacant_entry) => {
-                                    println!("Got unknown package");
-                                    println!("{:?}", cm.pending);
                                     if let Some(pending) =
                                         cm.pending.get_mut(&tcp_h.destination_port())
                                         && let Some(connection) =
                                             Connection::accept(&nic, iph, tcp_h, data)?
                                     {
-                                        println!("Accept connection");
                                         vacant_entry.insert(connection);
                                         pending.push_back(q);
 
