@@ -152,7 +152,6 @@ impl Connection {
             between_wrapping(start, seqn, end)
                 || between_wrapping(start, seqn.wrapping_add(n - 1), end)
         };
-
         if !is_valid {
             return Ok(());
         }
@@ -164,7 +163,7 @@ impl Connection {
 
         if let State::SynRcv = self.state {
             if between_wrapping(
-                self.send.una.wrapping_add(1),
+                self.send.una.wrapping_sub(1),
                 tcp_header.acknowledgment_number(),
                 self.send.nxt.wrapping_add(1),
             ) {
@@ -173,16 +172,19 @@ impl Connection {
                 // TODO: RST
             }
         }
-
         if let State::Established | State::FinWait1 | State::FinWait2 = self.state {
-            if !between_wrapping(
-                self.send.una,
-                tcp_header.acknowledgment_number(),
-                self.send.nxt.wrapping_add(1),
-            ) {
+            let ack = tcp_header.acknowledgment_number();
+
+            // Check if ACK is valid: SND.UNA <= SEG.ACK <= SND.NXT
+            // Reject only if ACK > SND.NXT (acknowledging unsent data)
+            if wrapping_lt(self.send.nxt, ack) {
                 return Ok(());
             }
-            self.send.una = tcp_header.acknowledgment_number();
+
+            // Update SND.UNA only if this ACK acknowledges new data
+            if wrapping_lt(self.send.una, ack) {
+                self.send.una = ack;
+            }
 
             if let State::Established = self.state {
                 self.tcp.fin = true;
@@ -261,13 +263,14 @@ impl Connection {
     }
 }
 
-fn wrapping_it(lhs: u32, rhs: u32) -> bool {
-    lhs.wrapping_add(rhs) > (1 << 31)
+fn wrapping_lt(lhs: u32, rhs: u32) -> bool {
+    // lhs < rhs in modular arithmetic
+    lhs.wrapping_sub(rhs) > (1 << 31)
 }
 
 fn between_wrapping(start: u32, x: u32, end: u32) -> bool
 where
     u32: PartialOrd + Ord,
 {
-    wrapping_it(start, x) && wrapping_it(x, end)
+    wrapping_lt(start, x) && wrapping_lt(x, end)
 }
