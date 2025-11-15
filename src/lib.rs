@@ -9,7 +9,7 @@ use std::{
 use etherparse::IpNumber;
 use tun::Device;
 
-use crate::tcp::Connection;
+use crate::tcp::{Available, Connection};
 
 pub mod tcp;
 
@@ -20,7 +20,8 @@ type InterfaceHandle = Arc<Handler>;
 #[derive(Default)]
 struct Handler {
     manager: Mutex<ConnectionManager>,
-    var: Condvar,
+    pending_var: Condvar,
+    rcv_var: Condvar,
 }
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Copy)]
@@ -79,7 +80,14 @@ fn packet_loop(ih: InterfaceHandle, nic: Device) -> std::io::Result<()> {
                             };
                             match cm.connection.entry(q) {
                                 Entry::Occupied(mut occupied_entry) => {
-                                    occupied_entry.get_mut().on_packet(&nic, iph, tcp_h, data)?;
+                                    let available = occupied_entry
+                                        .get_mut()
+                                        .on_packet(&nic, iph, tcp_h, data)?;
+
+                                    drop(lock);
+                                    if available.contains(Available::READ) {
+                                        ih.rcv_var.notify_all();
+                                    }
                                 }
                                 Entry::Vacant(vacant_entry) => {
                                     if let Some(pending) =
@@ -91,7 +99,7 @@ fn packet_loop(ih: InterfaceHandle, nic: Device) -> std::io::Result<()> {
                                         pending.push_back(q);
 
                                         drop(lock);
-                                        ih.var.notify_all();
+                                        ih.pending_var.notify_all();
                                     }
                                 }
                             }
@@ -172,31 +180,33 @@ impl Drop for TcpStream {
 impl Read for TcpStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let mut ih = self.h.manager.lock().unwrap();
-        let conn = ih.connection.get_mut(&self.quad).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                "stream was terminated unexpectedly",
-            )
-        })?;
+        loop {
+            let conn = ih.connection.get_mut(&self.quad).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "stream was terminated unexpectedly",
+                )
+            })?;
 
-        if conn.incomming.is_empty() {
-            // TODO: block
-            return Err(io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "no bytes to read.",
-            ));
+            if conn.is_rcv_closed() && conn.incomming.is_empty() {
+                return Ok(0);
+            }
+
+            if !conn.incomming.is_empty() {
+                let mut nread = 0;
+                let (head, tail) = conn.incomming.as_slices();
+                let hread = std::cmp::min(head.len(), buf.len());
+                buf[..hread].copy_from_slice(&head[..hread]);
+                nread += hread;
+                let tread = std::cmp::min(tail.len(), buf.len() - nread);
+                buf[..nread].copy_from_slice(&tail[..tread]);
+                nread += tread;
+                drop(conn.incomming.drain(..nread));
+                return Ok(nread);
+            }
+
+            ih = self.h.rcv_var.wait(ih).unwrap();
         }
-
-        let mut nread = 0;
-        let (head, tail) = conn.incomming.as_slices();
-        let hread = std::cmp::min(head.len(), buf.len());
-        buf[..hread].copy_from_slice(&head[..hread]);
-        nread += hread;
-        let tread = std::cmp::min(tail.len(), buf.len() - nread);
-        buf[..nread].copy_from_slice(&tail[..tread]);
-        nread += tread;
-        drop(conn.incomming.drain(..nread));
-        Ok(nread)
     }
 }
 
@@ -273,7 +283,7 @@ impl TcpListener {
                 });
             }
 
-            ih = self.h.var.wait(ih).unwrap();
+            ih = self.h.pending_var.wait(ih).unwrap();
         }
     }
 

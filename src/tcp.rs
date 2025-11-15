@@ -1,7 +1,16 @@
+use bitflags::bitflags;
 use std::{collections::VecDeque, io::Write};
 
 use etherparse::{IpNumber, Ipv4Header, Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
 use tun::Device;
+
+bitflags! {
+    pub(crate) struct Available: u8 {
+        const READ  = 0b00000001;
+        const WRITE = 0b00000010;
+    }
+
+}
 
 enum State {
     SynRcv,
@@ -65,6 +74,20 @@ struct RecvSequenceSpace {
 }
 
 impl Connection {
+    pub fn is_rcv_closed(&self) -> bool {
+        matches!(self.state, State::TimeWait)
+    }
+
+    fn availability(&self) -> Available {
+        let mut available = Available::empty();
+
+        if self.is_rcv_closed() || !self.incomming.is_empty() {
+            available |= Available::READ;
+        }
+
+        available
+    }
+
     pub fn accept(
         nic: &Device,
         iph: Ipv4HeaderSlice,
@@ -129,7 +152,7 @@ impl Connection {
         iph: Ipv4HeaderSlice,
         tcp_header: TcpHeaderSlice,
         payload: &[u8],
-    ) -> Result<(), std::io::Error> {
+    ) -> Result<Available, std::io::Error> {
         let start = self.recv.nxt.wrapping_sub(1);
         let seqn = tcp_header.sequence_number();
         let end = self.recv.nxt.wrapping_add(self.recv.wnd as u32);
@@ -153,12 +176,12 @@ impl Connection {
                 || between_wrapping(start, seqn.wrapping_add(n - 1), end)
         };
         if !is_valid {
-            return Ok(());
+            return Ok(self.availability());
         }
         self.recv.nxt = seqn.wrapping_add(n);
 
         if !tcp_header.ack() {
-            return Ok(());
+            return Ok(self.availability());
         }
 
         if let State::SynRcv = self.state {
@@ -204,7 +227,7 @@ impl Connection {
             }
         }
 
-        Ok(())
+        Ok(self.availability())
     }
 
     fn write(&mut self, nic: &Device, payload: &[u8]) -> std::io::Result<usize> {
