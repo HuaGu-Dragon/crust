@@ -175,14 +175,9 @@ impl Connection {
         if let State::Established | State::FinWait1 | State::FinWait2 = self.state {
             let ack = tcp_header.acknowledgment_number();
 
-            // Check if ACK is valid: SND.UNA <= SEG.ACK <= SND.NXT
-            // Reject only if ACK > SND.NXT (acknowledging unsent data)
-            if wrapping_lt(self.send.nxt, ack) {
-                return Ok(());
-            }
-
-            // Update SND.UNA only if this ACK acknowledges new data
-            if wrapping_lt(self.send.una, ack) {
+            // TODO: I think something is weird here.
+            // What if the ack is illegal
+            if between_wrapping(self.send.una, ack, self.send.nxt.wrapping_add(1)) {
                 self.send.una = ack;
             }
 
