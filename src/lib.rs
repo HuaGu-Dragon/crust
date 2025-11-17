@@ -60,13 +60,13 @@ fn packet_loop(ih: InterfaceHandle, nic: Device) -> std::io::Result<()> {
             Ok(iph) => {
                 let src = iph.source_addr();
                 let dst = iph.destination_addr();
-                println!(
-                    "Received packet: {} -> {}, protocol: {:?}, length: {}",
-                    src,
-                    dst,
-                    iph.protocol(),
-                    iph.total_len()
-                );
+                // println!(
+                //     "Received packet: {} -> {}, protocol: {:?}, length: {}",
+                //     src,
+                //     dst,
+                //     iph.protocol(),
+                //     iph.total_len()
+                // );
 
                 if iph.protocol() == IpNumber::TCP {
                     match etherparse::TcpHeaderSlice::from_slice(&buf[iph.slice().len()..n]) {
@@ -105,7 +105,7 @@ fn packet_loop(ih: InterfaceHandle, nic: Device) -> std::io::Result<()> {
                             }
                         }
                         Err(e) => {
-                            eprintln!("ignoring non-TCP packet: {:?}", e);
+                            // eprintln!("ignoring non-TCP packet: {:?}", e);
                             continue;
                         }
                     }
@@ -113,7 +113,7 @@ fn packet_loop(ih: InterfaceHandle, nic: Device) -> std::io::Result<()> {
             }
 
             Err(e) => {
-                eprintln!("Failed to parse IPv4 header: {:?}", e);
+                // eprintln!("Failed to parse IPv4 header: {:?}", e);
                 continue;
             }
         }

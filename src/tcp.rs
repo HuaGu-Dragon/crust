@@ -94,17 +94,17 @@ impl Connection {
         tcp_header: TcpHeaderSlice,
         payload: &[u8],
     ) -> Result<Option<Self>, std::io::Error> {
-        println!(
-            "RST packet: {}:{} -> {}:{}, seq: {}, ack: {}, window: {}, payload length: {}",
-            iph.source_addr(),
-            tcp_header.source_port(),
-            iph.destination_addr(),
-            tcp_header.destination_port(),
-            tcp_header.sequence_number(),
-            tcp_header.acknowledgment_number(),
-            tcp_header.window_size(),
-            payload.len()
-        );
+        // println!(
+        //     "RST packet: {}:{} -> {}:{}, seq: {}, ack: {}, window: {}, payload length: {}",
+        //     iph.source_addr(),
+        //     tcp_header.source_port(),
+        //     iph.destination_addr(),
+        //     tcp_header.destination_port(),
+        //     tcp_header.sequence_number(),
+        //     tcp_header.acknowledgment_number(),
+        //     tcp_header.window_size(),
+        //     payload.len()
+        // );
         if !tcp_header.syn() {
             // We only handle SYN packets in LISTEN state
             return Ok(None);
