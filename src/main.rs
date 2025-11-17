@@ -6,19 +6,21 @@ fn main() -> Result<(), io::Error> {
     let mut i = Interface::new()?;
     let port = 8080;
     let mut l = i.bind(port)?;
-    let jh = std::thread::spawn(move || {
-        while let Ok(mut stream) = l.accept() {
+    while let Ok(mut stream) = l.accept() {
+        println!("Got connection from {port}");
+        let mut data = Vec::new();
+        loop {
             let mut buf = [0; 512];
-            println!("Got connection from {port}");
             let n = stream.read(&mut buf).unwrap();
             if n == 0 {
-                println!("Connection Closed!")
+                println!("Connection Closed!");
+                break;
             } else {
-                println!("recv: {:?}", String::from_utf8_lossy(&buf[..n]));
+                data.extend_from_slice(&buf[..n]);
             }
         }
-    });
+        println!("recv: {}", String::from_utf8_lossy(&data[..]))
+    }
 
-    jh.join().unwrap();
     Ok(())
 }

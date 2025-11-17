@@ -223,10 +223,12 @@ impl Connection {
         }
 
         if let State::Established | State::FinWait1 | State::FinWait2 = self.state {
-            let mut unread = (self.recv.nxt - seqn) as usize;
-            if unread > payload.len() {
-                unread = 0;
-            }
+            let unread = (self.recv.nxt - seqn) as usize;
+
+            // Does it really need?
+            // if unread > payload.len() {
+            //     unread = 0;
+            // }
             self.incomming.extend(&payload[unread..]);
 
             // Only advance recv.nxt by the amount of new data we actually consumed
