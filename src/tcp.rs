@@ -175,12 +175,16 @@ impl Connection {
             between_wrapping(start, seqn, end)
                 || between_wrapping(start, seqn.wrapping_add(n - 1), end)
         };
+
         if !is_valid {
             return Ok(self.availability());
         }
-        self.recv.nxt = seqn.wrapping_add(n);
 
         if !tcp_header.ack() {
+            if tcp_header.syn() {
+                assert!(payload.is_empty());
+                self.recv.nxt = seqn.wrapping_add(n);
+            }
             return Ok(self.availability());
         }
 
@@ -195,6 +199,7 @@ impl Connection {
                 // TODO: RST
             }
         }
+
         if let State::Established | State::FinWait1 | State::FinWait2 = self.state {
             let ack = tcp_header.acknowledgment_number();
 
@@ -206,7 +211,7 @@ impl Connection {
 
             if let State::Established = self.state {
                 self.tcp.fin = true;
-                self.write(nic, &[])?;
+                // self.write(nic, &[])?;
                 self.state = State::FinWait1;
             }
         }
@@ -216,6 +221,24 @@ impl Connection {
                 self.state = State::FinWait2;
             }
         }
+
+        if let State::Established | State::FinWait1 | State::FinWait2 = self.state {
+            let mut unread = (self.recv.nxt - seqn) as usize;
+            if unread > payload.len() {
+                unread = 0;
+            }
+            self.incomming.extend(&payload[unread..]);
+
+            // Only advance recv.nxt by the amount of new data we actually consumed
+            self.recv.nxt = self
+                .recv
+                .nxt
+                .wrapping_add((payload.len() - unread) as u32)
+                .wrapping_add(if tcp_header.fin() { 1 } else { 0 });
+
+            self.write(nic, &[])?;
+        }
+
         if tcp_header.fin() {
             match self.state {
                 State::FinWait2 => {

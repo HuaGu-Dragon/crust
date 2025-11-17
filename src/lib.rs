@@ -199,7 +199,7 @@ impl Read for TcpStream {
                 buf[..hread].copy_from_slice(&head[..hread]);
                 nread += hread;
                 let tread = std::cmp::min(tail.len(), buf.len() - nread);
-                buf[..nread].copy_from_slice(&tail[..tread]);
+                buf[hread..][..tread].copy_from_slice(&tail[..tread]);
                 nread += tread;
                 drop(conn.incomming.drain(..nread));
                 return Ok(nread);
