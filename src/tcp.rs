@@ -1,8 +1,8 @@
 use bitflags::bitflags;
 use std::{collections::VecDeque, io::Write};
+use tun_rs::SyncDevice;
 
 use etherparse::{IpNumber, Ipv4Header, Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
-use tun::Device;
 
 bitflags! {
     pub(crate) struct Available: u8 {
@@ -89,7 +89,7 @@ impl Connection {
     }
 
     pub fn accept(
-        nic: &Device,
+        nic: &SyncDevice,
         iph: Ipv4HeaderSlice,
         tcp_header: TcpHeaderSlice,
         payload: &[u8],
@@ -148,7 +148,7 @@ impl Connection {
     }
     pub fn on_packet(
         &mut self,
-        nic: &Device,
+        nic: &SyncDevice,
         iph: Ipv4HeaderSlice,
         tcp_header: TcpHeaderSlice,
         payload: &[u8],
@@ -255,7 +255,7 @@ impl Connection {
         Ok(self.availability())
     }
 
-    fn write(&mut self, nic: &Device, payload: &[u8]) -> std::io::Result<usize> {
+    fn write(&mut self, nic: &SyncDevice, payload: &[u8]) -> std::io::Result<usize> {
         let mut buf = [0u8; 1500];
 
         self.tcp.sequence_number = self.send.nxt;
@@ -293,7 +293,7 @@ impl Connection {
         Ok(n)
     }
 
-    fn send_rst(&mut self, nic: &Device) -> std::io::Result<()> {
+    fn send_rst(&mut self, nic: &SyncDevice) -> std::io::Result<()> {
         self.tcp.rst = true;
         // TODO: fix sequencee number here
         // TODO: handle synchronized RST

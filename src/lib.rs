@@ -7,7 +7,7 @@ use std::{
 };
 
 use etherparse::IpNumber;
-use tun::Device;
+use tun_rs::{DeviceBuilder, SyncDevice};
 
 use crate::tcp::{Available, Connection};
 
@@ -51,7 +51,7 @@ pub struct ConnectionManager {
     pending: HashMap<u16, VecDeque<Quad>>,
 }
 
-fn packet_loop(ih: InterfaceHandle, nic: Device) -> std::io::Result<()> {
+fn packet_loop(ih: InterfaceHandle, nic: SyncDevice) -> std::io::Result<()> {
     let mut buf = [0u8; 1500];
 
     loop {
@@ -122,14 +122,11 @@ fn packet_loop(ih: InterfaceHandle, nic: Device) -> std::io::Result<()> {
 
 impl Interface {
     pub fn new() -> io::Result<Self> {
-        let mut config = tun::Configuration::default();
-        config
-            .tun_name("tun0")
-            .address((192, 168, 0, 1))
-            .netmask((255, 255, 255, 0))
-            .up();
+        let nic = DeviceBuilder::new()
+            .name("tun0")
+            .ipv4(Ipv4Addr::new(192, 168, 0, 1), 24, None)
+            .build_sync()?;
 
-        let nic = Device::new(&config)?;
         let ih: InterfaceHandle = Arc::default();
         let jh = {
             let handle = ih.clone();
@@ -170,7 +167,7 @@ pub struct TcpStream {
 
 impl Drop for TcpStream {
     fn drop(&mut self) {
-        let mut cm = self.h.manager.lock().unwrap();
+        let _cm = self.h.manager.lock().unwrap();
         // TODO: send FIN packet on cm.connections[quad]
         // if let Some(c) = cm.connection.remove(&self.quad) {
         // }
@@ -266,7 +263,7 @@ impl Drop for TcpListener {
             .remove(&self.port)
             .expect("port closed while listener still active");
 
-        for quad in pending {
+        for _quad in pending {
             // TODO: terminate all the connections
         }
     }
