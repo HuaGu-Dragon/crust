@@ -1,5 +1,8 @@
 use bitflags::bitflags;
-use std::{collections::VecDeque, io::Write};
+use std::{
+    collections::VecDeque,
+    io::{self, Write},
+};
 use tun_rs::SyncDevice;
 
 use etherparse::{IpNumber, Ipv4Header, Ipv4HeaderSlice, TcpHeader, TcpHeaderSlice};
@@ -302,6 +305,21 @@ impl Connection {
         self.write(nic, &[])?;
         // TODO: Does it needed?
         // self.tcp.rst = false;
+        Ok(())
+    }
+
+    pub(crate) fn close(&mut self) -> std::io::Result<()> {
+        match self.state {
+            State::SynRcv | State::Established => self.state = State::FinWait1,
+            State::FinWait1 | State::FinWait2 => {}
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "already closed",
+                ));
+            }
+        };
+
         Ok(())
     }
 }

@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque, hash_map::Entry},
     io::{self, Read, Write},
-    net::{Ipv4Addr, Shutdown},
+    net::Ipv4Addr,
     sync::{Arc, Condvar, Mutex},
     thread,
 };
@@ -165,6 +165,20 @@ pub struct TcpStream {
     h: InterfaceHandle,
 }
 
+impl TcpStream {
+    pub fn shutdown(&self) -> std::io::Result<()> {
+        let mut cm = self.h.manager.lock().unwrap();
+        let c = cm.connection.get_mut(&self.quad).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "stream was terminated unexpectedly",
+            )
+        })?;
+
+        c.close()
+    }
+}
+
 impl Drop for TcpStream {
     fn drop(&mut self) {
         let _cm = self.h.manager.lock().unwrap();
@@ -282,9 +296,5 @@ impl TcpListener {
 
             ih = self.h.pending_var.wait(ih).unwrap();
         }
-    }
-
-    pub fn shutdown(&self, how: Shutdown) -> io::Result<()> {
-        unimplemented!()
     }
 }
