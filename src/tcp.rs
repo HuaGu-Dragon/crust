@@ -15,6 +15,7 @@ bitflags! {
 
 }
 
+#[derive(Debug)]
 enum State {
     SynRcv,
     Established,
@@ -218,14 +219,16 @@ impl Connection {
             if let State::Established = self.state {
                 self.tcp.fin = true;
                 // self.write(nic, &[])?;
+                self.closed_at = Some(self.send.una.wrapping_add(self.unacked.len() as u32));
                 self.state = State::FinWait1;
             }
         }
 
-        if let State::FinWait1 = self.state {
-            if self.send.una == self.send.iss + 2 {
-                self.state = State::FinWait2;
-            }
+        if let State::FinWait1 = self.state
+            && let Some(closed_at) = self.closed_at
+            && self.send.una == closed_at.wrapping_add(1)
+        {
+            self.state = State::FinWait2;
         }
 
         if let State::Established | State::FinWait1 | State::FinWait2 = self.state {
@@ -244,7 +247,6 @@ impl Connection {
                 .wrapping_add((payload.len() - unread) as u32)
                 .wrapping_add(if tcp_header.fin() { 1 } else { 0 });
 
-            self.closed_at = Some(self.send.una.wrapping_add(self.unacked.len() as u32));
             self.write(nic, self.send.nxt, 0)?;
         }
 
@@ -255,7 +257,7 @@ impl Connection {
                     self.write(nic, self.send.nxt, 0)?;
                     self.state = State::TimeWait;
                 }
-                _ => unimplemented!(),
+                ref s => println!("{s:?}"),
             }
         }
 
