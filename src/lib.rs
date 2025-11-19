@@ -11,7 +11,7 @@ use tun_rs::{DeviceBuilder, SyncDevice};
 
 use crate::tcp::{Available, Connection};
 
-pub mod tcp;
+mod tcp;
 
 const SENDQUEUE_SIZE: usize = 1024;
 

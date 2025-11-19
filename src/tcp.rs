@@ -46,6 +46,8 @@ pub struct Connection {
 
     pub(crate) incomming: VecDeque<u8>,
     pub(crate) unacked: VecDeque<u8>,
+
+    closed_at: Option<u32>,
 }
 
 struct SendSequenceSpace {
@@ -141,15 +143,16 @@ impl Connection {
             ),
             incomming: Default::default(),
             unacked: Default::default(),
+            closed_at: None,
         };
 
         c.tcp.syn = true;
         c.tcp.ack = true;
-        c.write(nic, &[])?;
+        c.write(nic, c.send.nxt, 0)?;
 
         Ok(Some(c))
     }
-    pub fn on_packet(
+    pub(crate) fn on_packet(
         &mut self,
         nic: &SyncDevice,
         iph: Ipv4HeaderSlice,
@@ -241,14 +244,15 @@ impl Connection {
                 .wrapping_add((payload.len() - unread) as u32)
                 .wrapping_add(if tcp_header.fin() { 1 } else { 0 });
 
-            self.write(nic, &[])?;
+            self.closed_at = Some(self.send.una.wrapping_add(self.unacked.len() as u32));
+            self.write(nic, self.send.nxt, 0)?;
         }
 
         if tcp_header.fin() {
             match self.state {
                 State::FinWait2 => {
                     // we're done with the connection!
-                    self.write(nic, &[])?;
+                    self.write(nic, self.send.nxt, 0)?;
                     self.state = State::TimeWait;
                 }
                 _ => unimplemented!(),
@@ -258,42 +262,90 @@ impl Connection {
         Ok(self.availability())
     }
 
-    fn write(&mut self, nic: &SyncDevice, payload: &[u8]) -> std::io::Result<usize> {
+    fn write(&mut self, nic: &SyncDevice, seq: u32, mut limit: usize) -> std::io::Result<usize> {
         let mut buf = [0u8; 1500];
 
-        self.tcp.sequence_number = self.send.nxt;
+        self.tcp.sequence_number = seq;
         self.tcp.acknowledgment_number = self.recv.nxt;
 
-        let size = buf
-            .len()
-            .min(self.iph.header_len() + self.tcp.header_len() + payload.len());
+        let mut offset = seq.wrapping_sub(self.send.una) as usize;
+
+        if let Some(closed_at) = self.closed_at
+            && seq == closed_at.wrapping_add(1)
+        {
+            // trying to write following FIN
+            offset = 0;
+            limit = 0;
+        }
+
+        let (mut h, mut t) = self.unacked.as_slices();
+        if h.len() >= offset {
+            h = &h[offset..];
+        } else {
+            let skipped = h.len();
+            h = &[];
+            t = &t[offset - skipped..];
+        }
+
+        let max_data = std::cmp::max(limit, h.len() + t.len());
+        let size = std::cmp::min(
+            buf.len(),
+            self.tcp.header_len() + self.iph.header_len() + max_data,
+        );
         self.iph
             .set_payload_len(size - self.iph.header_len())
             .expect("Failed to set payload len");
 
+        let buf_len = buf.len();
+        let mut unwritten = &mut buf[..];
+
+        self.iph.write(&mut unwritten)?;
+        let ip_header_end_at = buf_len - unwritten.len();
+
+        unwritten = &mut unwritten[self.tcp.header_len()..];
+        let tcp_header_end_at = buf_len - unwritten.len();
+
+        let payload_bytes = {
+            let mut written = 0;
+            let mut limit = max_data;
+
+            let head = std::cmp::min(limit, h.len());
+            written += unwritten.write(&h[..head])?;
+            limit -= written;
+
+            let tail = std::cmp::min(limit, t.len());
+            written += unwritten.write(&t[..tail])?;
+
+            written
+        };
+        let payload_end_at = buf_len - unwritten.len();
+        assert!(payload_bytes == payload_end_at - tcp_header_end_at);
+
         self.tcp.checksum = self
             .tcp
-            .calc_checksum_ipv4(&self.iph, payload) // TODO: what if payload too large?
+            .calc_checksum_ipv4(&self.iph, &buf[tcp_header_end_at..payload_end_at])
             .expect("failed to compute checksum");
 
-        let mut unwritten = &mut buf[..];
-        self.iph.write(&mut unwritten)?;
-        self.tcp.write(&mut unwritten)?;
-        let n = unwritten.write(payload)?;
-        let unwritten = unwritten.len();
+        let mut tcp_header_buf = &mut buf[ip_header_end_at..tcp_header_end_at];
+        self.tcp.write(&mut tcp_header_buf)?;
 
-        self.send.nxt = self.send.nxt.wrapping_add(n as u32);
+        let mut next_seq = seq.wrapping_add(payload_bytes as u32);
         if self.tcp.syn {
-            self.send.nxt = self.send.nxt.wrapping_add(1);
+            next_seq = next_seq.wrapping_add(1);
             self.tcp.syn = false;
         }
         if self.tcp.fin {
-            self.send.nxt = self.send.nxt.wrapping_add(1);
+            next_seq = next_seq.wrapping_add(1);
             self.tcp.fin = false;
         }
 
-        nic.send(&buf[..buf.len() - unwritten])?;
-        Ok(n)
+        if wrapping_lt(self.send.nxt, next_seq) {
+            self.send.nxt = next_seq;
+        }
+        // self.timers.send_times.insert(seq, time::Instant::now());
+
+        nic.send(&buf[..payload_end_at])?;
+        Ok(payload_bytes)
     }
 
     fn send_rst(&mut self, nic: &SyncDevice) -> std::io::Result<()> {
@@ -302,7 +354,7 @@ impl Connection {
         // TODO: handle synchronized RST
         self.tcp.sequence_number = 0;
         self.tcp.acknowledgment_number = 0;
-        self.write(nic, &[])?;
+        self.write(nic, self.send.nxt, 0)?;
         // TODO: Does it needed?
         // self.tcp.rst = false;
         Ok(())
