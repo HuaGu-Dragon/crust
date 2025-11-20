@@ -220,7 +220,6 @@ impl Connection {
                 self.tcp.fin = true;
                 // self.write(nic, &[])?;
                 self.closed_at = Some(self.send.una.wrapping_add(self.unacked.len() as u32));
-                println!("{}", self.closed_at.unwrap());
                 self.state = State::FinWait1;
             }
         }
@@ -394,19 +393,3 @@ where
 {
     wrapping_lt(start, x) && wrapping_lt(x, end)
 }
-
-/*
-
-41   2.344139  192.168.0.1 → 192.168.0.2  TCP 60 46633 → 8080 [SYN] Seq=0 Win=64240 Len=0 MSS=1460 SACK_PERM TSval=1335818497 TSecr=0 WS=128
-42   2.344267  192.168.0.2 → 192.168.0.1  TCP 40 8080 → 46633 [SYN, ACK] Seq=0 Ack=1 Win=1024 Len=0
-43   2.344402  192.168.0.1 → 192.168.0.2  TCP 40 46633 → 8080 [ACK] Seq=1 Ack=1 Win=64240 Len=0
-44   2.344452  192.168.0.1 → 192.168.0.2  TCP 46 46633 → 8080 [PSH, ACK] Seq=1 Ack=1 Win=64240 Len=6
-45   2.344628  192.168.0.2 → 192.168.0.1  TCP 40 8080 → 46633 [FIN, ACK] Seq=1 Ack=1 Win=1024 Len=0
-46   2.344657  192.168.0.2 → 192.168.0.1  TCP 40 8080 → 46633 [ACK] Seq=2 Ack=7 Win=1024 Len=0
-47   2.344891  192.168.0.1 → 192.168.0.2  TCP 40 46633 → 8080 [ACK] Seq=7 Ack=2 Win=64239 Len=0
-48   2.344922  192.168.0.1 → 192.168.0.2  TCP 40 46633 → 8080 [FIN, ACK] Seq=7 Ack=2 Win=64239 Len=0
-49   2.344922  192.168.0.2 → 192.168.0.1  TCP 40 [TCP Dup ACK 46#1] 8080 → 46633 [ACK] Seq=2 Ack=7 Win=1024 Len=0
-50   2.344959  192.168.0.2 → 192.168.0.1  TCP 40 8080 → 46633 [ACK] Seq=2 Ack=8 Win=1024 Len=0
-51   2.344969  192.168.0.2 → 192.168.0.1  TCP 40 [TCP Dup ACK 50#1] 8080 → 46633 [ACK] Seq=2 Ack=8 Win=1024 Len=0
-
-*/
