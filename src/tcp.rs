@@ -218,7 +218,6 @@ impl Connection {
 
             if let State::Established = self.state {
                 self.tcp.fin = true;
-                // self.write(nic, &[])?;
                 self.closed_at = Some(self.send.una.wrapping_add(self.unacked.len() as u32));
                 self.state = State::FinWait1;
             }
@@ -275,6 +274,16 @@ impl Connection {
         self.tcp.acknowledgment_number = self.recv.nxt;
 
         let mut offset = seq.wrapping_sub(self.send.una) as usize;
+
+        eprintln!(
+            "DEBUG write(): seq={}, send.una={}, send.nxt={}, offset={}, unacked.len={}, limit={}",
+            seq,
+            self.send.una,
+            self.send.nxt,
+            offset,
+            self.unacked.len(),
+            limit
+        );
 
         if let Some(closed_at) = self.closed_at
             && seq == closed_at.wrapping_add(1)
@@ -351,6 +360,10 @@ impl Connection {
         // self.timers.send_times.insert(seq, time::Instant::now());
 
         nic.send(&buf[..payload_end_at])?;
+        eprintln!(
+            "DEBUG write(): sent {} bytes, next_seq={}, payload_end_at={}",
+            payload_bytes, next_seq, payload_end_at
+        );
         Ok(payload_bytes)
     }
 
@@ -368,7 +381,12 @@ impl Connection {
 
     pub(crate) fn close(&mut self) -> std::io::Result<()> {
         match self.state {
-            State::SynRcv | State::Established => self.state = State::FinWait1,
+            State::SynRcv | State::Established => {
+                self.tcp.fin = true;
+                self.closed_at = Some(self.send.una.wrapping_add(self.unacked.len() as u32));
+                self.state = State::FinWait1;
+            }
+
             State::FinWait1 | State::FinWait2 => {}
             _ => {
                 return Err(io::Error::new(
