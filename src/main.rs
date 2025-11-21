@@ -9,6 +9,7 @@ fn main() -> Result<(), io::Error> {
     while let Ok(mut stream) = l.accept() {
         println!("Got connection from {port}");
         let mut data = Vec::new();
+        stream.write_all(b"Hello from Rust").unwrap();
         loop {
             let mut buf = [0; 512];
             let n = stream.read(&mut buf).unwrap();

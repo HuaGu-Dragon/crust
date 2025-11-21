@@ -63,6 +63,9 @@ fn packet_loop(ih: InterfaceHandle, nic: SyncDevice) -> std::io::Result<()> {
                 Ok(n) => break n,
                 Err(_) => {
                     if now.elapsed().as_millis() > 100 {
+                        for con in ih.manager.lock().unwrap().connection.values_mut() {
+                            con.on_tick(&nic)?;
+                        }
                         continue;
                     }
                 }

@@ -21,8 +21,11 @@ enum State {
     Established,
     FinWait1,
     FinWait2,
+    CloseWait,
     Closing,
     TimeWait,
+    LastAck,
+    Closed,
 }
 
 impl State {
@@ -33,7 +36,10 @@ impl State {
             | State::FinWait1
             | State::FinWait2
             | Self::TimeWait
-            | Self::Closing => true,
+            | Self::Closing
+            | Self::CloseWait
+            | Self::LastAck
+            | Self::Closed => true,
         }
     }
 }
@@ -81,7 +87,7 @@ struct RecvSequenceSpace {
 
 impl Connection {
     pub fn is_rcv_closed(&self) -> bool {
-        matches!(self.state, State::TimeWait)
+        matches!(self.state, State::TimeWait | State::Closed)
     }
 
     fn availability(&self) -> Available {
@@ -207,20 +213,27 @@ impl Connection {
             }
         }
 
-        if let State::Established | State::FinWait1 | State::FinWait2 = self.state {
+        if let State::Established | State::FinWait1 | State::FinWait2 | State::CloseWait =
+            self.state
+        {
             let ack = tcp_header.acknowledgment_number();
 
             // TODO: I think something is weird here.
             // What if the ack is illegal
             if between_wrapping(self.send.una, ack, self.send.nxt.wrapping_add(1)) {
+                // let data_acked = ack.wrapping_sub(self.send.una) as usize;
                 self.send.una = ack;
+                // Remove acknowledged bytes from unacked queue
+                // if data_acked > 0 && data_acked <= self.unacked.len() {
+                //     drop(self.unacked.drain(..data_acked));
+                // }
             }
 
-            if let State::Established = self.state {
-                self.tcp.fin = true;
-                self.closed_at = Some(self.send.una.wrapping_add(self.unacked.len() as u32));
-                self.state = State::FinWait1;
-            }
+            // if let State::Established = self.state {
+            //     self.tcp.fin = true;
+            //     self.closed_at = Some(self.send.una.wrapping_add(self.unacked.len() as u32));
+            //     self.state = State::FinWait1;
+            // }
         }
 
         if let State::FinWait1 = self.state
@@ -238,14 +251,7 @@ impl Connection {
                     self.recv.nxt = self.recv.nxt.wrapping_add(1);
                     // Send ACK for the FIN
                     self.write(nic, self.send.nxt, 0)?;
-                    // TODO: Does our packet all send to the client?
-                    //
-                    // Now send our own FIN
-                    self.tcp.fin = true;
-                    self.closed_at = Some(self.send.nxt);
-                    self.write(nic, self.send.nxt, 0)?;
-                    // Transition to LAST-ACK state (using TimeWait for simplicity)
-                    self.state = State::TimeWait;
+                    self.state = State::CloseWait;
                 }
                 State::FinWait2 => {
                     // Advance recv.nxt for the FIN
@@ -375,10 +381,10 @@ impl Connection {
         // self.timers.send_times.insert(seq, time::Instant::now());
 
         nic.send(&buf[..payload_end_at])?;
-        eprintln!(
-            "DEBUG write(): sent {} bytes, next_seq={}, payload_end_at={}",
-            payload_bytes, next_seq, payload_end_at
-        );
+        // eprintln!(
+        //     "DEBUG write(): sent {} bytes, next_seq={}, payload_end_at={}",
+        //     payload_bytes, next_seq, payload_end_at
+        // );
         Ok(payload_bytes)
     }
 
@@ -394,6 +400,25 @@ impl Connection {
         Ok(())
     }
 
+    pub(crate) fn on_tick(&mut self, nic: &SyncDevice) -> std::io::Result<()> {
+        if !self.unacked.is_empty() {
+            self.tcp.psh = true;
+            self.write(nic, self.send.una, self.unacked.len())?;
+            self.tcp.psh = false;
+            drop(self.unacked.drain(..));
+            assert!(self.unacked.is_empty());
+        }
+
+        if let State::CloseWait = self.state {
+            self.tcp.fin = true;
+            self.closed_at = Some(self.send.una.wrapping_add(self.unacked.len() as u32));
+            self.write(nic, self.send.una, 0)?;
+            self.state = State::Closed;
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn close(&mut self) -> std::io::Result<()> {
         match self.state {
             State::SynRcv | State::Established => {
@@ -402,7 +427,13 @@ impl Connection {
                 self.state = State::FinWait1;
             }
 
-            State::FinWait1 | State::FinWait2 => {}
+            State::CloseWait => {
+                self.tcp.fin = true;
+                self.closed_at = Some(self.send.una.wrapping_add(self.unacked.len() as u32));
+                self.state = State::LastAck;
+            }
+
+            State::FinWait1 | State::FinWait2 | State::LastAck => {}
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::NotConnected,
