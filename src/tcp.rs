@@ -232,6 +232,21 @@ impl Connection {
 
         if tcp_header.fin() {
             match self.state {
+                State::Established => {
+                    // Client is closing connection
+                    // Advance recv.nxt for the FIN
+                    self.recv.nxt = self.recv.nxt.wrapping_add(1);
+                    // Send ACK for the FIN
+                    self.write(nic, self.send.nxt, 0)?;
+                    // TODO: Does our packet all send to the client?
+                    //
+                    // Now send our own FIN
+                    self.tcp.fin = true;
+                    self.closed_at = Some(self.send.nxt);
+                    self.write(nic, self.send.nxt, 0)?;
+                    // Transition to LAST-ACK state (using TimeWait for simplicity)
+                    self.state = State::TimeWait;
+                }
                 State::FinWait2 => {
                     // Advance recv.nxt for the FIN
                     self.recv.nxt = self.recv.nxt.wrapping_add(1);

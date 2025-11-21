@@ -4,10 +4,11 @@ use std::{
     net::Ipv4Addr,
     sync::{Arc, Condvar, Mutex},
     thread,
+    time::Instant,
 };
 
 use etherparse::IpNumber;
-use tun_rs::{DeviceBuilder, InterruptEvent, SyncDevice};
+use tun_rs::{DeviceBuilder, SyncDevice};
 
 use crate::tcp::{Available, Connection};
 
@@ -54,20 +55,20 @@ pub struct ConnectionManager {
 fn packet_loop(ih: InterfaceHandle, nic: SyncDevice) -> std::io::Result<()> {
     let mut buf = [0u8; 1500];
 
-    // let event = InterruptEvent::new().unwrap();
     loop {
-        let n = nic.recv(&mut buf)?;
-        let n = match nic.recv_intr_timeout(
-        //     &mut buf,
-        //     &event,
-        //     Some(std::time::Duration::from_secs(1)),
-        // ) {
-        //     Ok(n) => n,
-        //     Err(_) => {
-        //         println!("Timeout");
-        //         continue;
-        //     }
-        // };
+        let now = Instant::now();
+
+        let n = loop {
+            match nic.try_recv(&mut buf) {
+                Ok(n) => break n,
+                Err(_) => {
+                    if now.elapsed().as_millis() > 100 {
+                        continue;
+                    }
+                }
+            };
+        };
+
         match etherparse::Ipv4HeaderSlice::from_slice(&buf[..n]) {
             Ok(iph) => {
                 let src = iph.source_addr();
