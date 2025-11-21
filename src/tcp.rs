@@ -317,7 +317,7 @@ impl Connection {
             t = &t[offset - skipped..];
         }
 
-        let max_data = std::cmp::max(limit, h.len() + t.len());
+        let max_data = std::cmp::min(limit, h.len() + t.len());
         let size = std::cmp::min(
             buf.len(),
             self.tcp.header_len() + self.iph.header_len() + max_data,
