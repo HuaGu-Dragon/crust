@@ -401,15 +401,15 @@ impl Connection {
 
         let mut offset = seq.wrapping_sub(self.send.una) as usize;
 
-        eprintln!(
-            "DEBUG write(): seq={}, send.una={}, send.nxt={}, offset={}, unacked.len={}, limit={}",
-            seq,
-            self.send.una,
-            self.send.nxt,
-            offset,
-            self.unacked.len(),
-            limit
-        );
+        // eprintln!(
+        //     "DEBUG write(): seq={}, send.una={}, send.nxt={}, offset={}, unacked.len={}, limit={}",
+        //     seq,
+        //     self.send.una,
+        //     self.send.nxt,
+        //     offset,
+        //     self.unacked.len(),
+        //     limit
+        // );
 
         if let Some(closed_at) = self.closed_at
             && seq == closed_at.wrapping_add(1)

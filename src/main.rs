@@ -10,7 +10,7 @@ fn main() -> Result<(), io::Error> {
         std::thread::spawn(move || {
             println!("Got connection from {port}");
             let mut data = Vec::new();
-            stream.write_all(b"Hello from Rust").unwrap();
+            writeln!(stream, "Send from Rust!").unwrap();
             loop {
                 let mut buf = [0; 512];
                 let n = stream.read(&mut buf).unwrap();
