@@ -120,7 +120,7 @@ fn packet_loop(ih: InterfaceHandle, nic: SyncDevice) -> std::io::Result<()> {
                                 }
                             }
                         }
-                        Err(e) => {
+                        Err(_) => {
                             // eprintln!("ignoring non-TCP packet: {:?}", e);
                             continue;
                         }
@@ -128,7 +128,7 @@ fn packet_loop(ih: InterfaceHandle, nic: SyncDevice) -> std::io::Result<()> {
                 }
             }
 
-            Err(e) => {
+            Err(_) => {
                 // eprintln!("Failed to parse IPv4 header: {:?}", e);
                 continue;
             }

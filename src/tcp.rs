@@ -64,14 +64,14 @@ struct SendSequenceSpace {
     nxt: u32,
     /// send window
     wnd: u16,
-    /// send urgent pointer
-    up: bool,
-    /// segment sequence number used for last windows update
-    wl1: u32,
-    /// segment acknowledge number ussed for last windows update
-    wl2: u32,
-    /// initial send sequence number
-    iss: u32,
+    // /// send urgent pointer
+    // up: bool,
+    // /// segment sequence number used for last windows update
+    // wl1: u32,
+    // /// segment acknowledge number ussed for last windows update
+    // wl2: u32,
+    // /// initial send sequence number
+    // iss: u32,
 }
 
 struct RecvSequenceSpace {
@@ -79,10 +79,10 @@ struct RecvSequenceSpace {
     nxt: u32,
     /// receive winodw
     wnd: u16,
-    /// receive urgent pointer
-    up: bool,
-    /// initial receive sequence number
-    irs: u32,
+    // /// receive urgent pointer
+    // up: bool,
+    // /// initial receive sequence number
+    // irs: u32,
 }
 
 impl Connection {
@@ -104,7 +104,7 @@ impl Connection {
         nic: &SyncDevice,
         iph: Ipv4HeaderSlice,
         tcp_header: TcpHeaderSlice,
-        payload: &[u8],
+        _payload: &[u8],
     ) -> Result<Option<Self>, std::io::Error> {
         // println!(
         //     "RST packet: {}:{} -> {}:{}, seq: {}, ack: {}, window: {}, payload length: {}",
@@ -127,19 +127,19 @@ impl Connection {
         let mut c = Connection {
             state: State::SynRcv,
             send: SendSequenceSpace {
-                iss,
+                // iss,
                 una: iss,
                 nxt: iss,
                 wnd,
-                up: false,
-                wl1: 0,
-                wl2: 0,
+                // up: false,
+                // wl1: 0,
+                // wl2: 0,
             },
             recv: RecvSequenceSpace {
-                irs: tcp_header.sequence_number(),
+                // irs: tcp_header.sequence_number(),
                 nxt: tcp_header.sequence_number() + 1,
                 wnd: tcp_header.window_size(),
-                up: false,
+                // up: false,
             },
             iph: Ipv4Header::new(0, 64, IpNumber::TCP, iph.destination(), iph.source()).unwrap(),
             tcp: TcpHeader::new(
@@ -162,80 +162,131 @@ impl Connection {
     pub(crate) fn on_packet(
         &mut self,
         nic: &SyncDevice,
-        iph: Ipv4HeaderSlice,
+        _iph: Ipv4HeaderSlice,
         tcp_header: TcpHeaderSlice,
         payload: &[u8],
     ) -> Result<Available, std::io::Error> {
-        let start = self.recv.nxt.wrapping_sub(1);
+        // Sequence number validation according to RFC 793
         let seqn = tcp_header.sequence_number();
-        let end = self.recv.nxt.wrapping_add(self.recv.wnd as u32);
-        let mut n = payload.len() as u32;
+        let mut seg_len = payload.len() as u32;
         if tcp_header.fin() {
-            n += 1;
+            seg_len += 1;
         }
         if tcp_header.syn() {
-            n += 1;
+            seg_len += 1;
         }
-        let is_valid = if n == 0 {
-            if self.recv.wnd == 0 {
+
+        let rcv_wnd = self.recv.wnd as u32;
+        let is_valid = if seg_len == 0 {
+            // Zero length segment
+            if rcv_wnd == 0 {
                 seqn == self.recv.nxt
             } else {
-                between_wrapping(start, seqn, end)
+                // RCV.NXT =< SEG.SEQ < RCV.NXT+RCV.WND
+                between_wrapping(
+                    self.recv.nxt.wrapping_sub(1),
+                    seqn,
+                    self.recv.nxt.wrapping_add(rcv_wnd),
+                )
             }
-        } else if self.recv.wnd == 0 {
-            false
         } else {
-            between_wrapping(start, seqn, end)
-                || between_wrapping(start, seqn.wrapping_add(n - 1), end)
+            // Segment with data
+            if rcv_wnd == 0 {
+                false
+            } else {
+                // RCV.NXT =< SEG.SEQ < RCV.NXT+RCV.WND
+                // or RCV.NXT =< SEG.SEQ+SEG.LEN-1 < RCV.NXT+RCV.WND
+                let seg_end = seqn.wrapping_add(seg_len - 1);
+                between_wrapping(
+                    self.recv.nxt.wrapping_sub(1),
+                    seqn,
+                    self.recv.nxt.wrapping_add(rcv_wnd),
+                ) || between_wrapping(
+                    self.recv.nxt.wrapping_sub(1),
+                    seg_end,
+                    self.recv.nxt.wrapping_add(rcv_wnd),
+                )
+            }
         };
 
         if !is_valid {
+            // Send ACK for invalid sequence number
+            if tcp_header.ack() {
+                self.write(nic, self.send.nxt, 0)?;
+            }
+            return Ok(self.availability());
+        }
+
+        // Process RST
+        if tcp_header.rst() {
+            match self.state {
+                State::SynRcv => {
+                    // Return to LISTEN (connection will be removed)
+                    self.state = State::Closed;
+                    return Ok(self.availability());
+                }
+                State::Established | State::FinWait1 | State::FinWait2 | State::CloseWait => {
+                    // Close the connection
+                    self.state = State::Closed;
+                    return Ok(self.availability());
+                }
+                _ => {}
+            }
+        }
+
+        // Process SYN in synchronized states
+        if tcp_header.syn() && self.state.is_synchronized() {
+            // This is an error - send RST and close
+            self.state = State::Closed;
             return Ok(self.availability());
         }
 
         if !tcp_header.ack() {
             if tcp_header.syn() {
                 assert!(payload.is_empty());
-                self.recv.nxt = seqn.wrapping_add(n);
+                self.recv.nxt = seqn.wrapping_add(seg_len);
             }
             return Ok(self.availability());
         }
 
+        // Process ACK
+        let ack = tcp_header.acknowledgment_number();
+
         if let State::SynRcv = self.state {
             if between_wrapping(
                 self.send.una.wrapping_sub(1),
-                tcp_header.acknowledgment_number(),
+                ack,
                 self.send.nxt.wrapping_add(1),
             ) {
+                // Update send.una to acknowledge the SYN
+                self.send.una = ack;
                 self.state = State::Established;
             } else {
                 // TODO: RST
+                return Ok(self.availability());
             }
         }
 
-        if let State::Established | State::FinWait1 | State::FinWait2 | State::CloseWait =
-            self.state
+        // Process ACK in synchronized states
+        if let State::Established
+        | State::FinWait1
+        | State::FinWait2
+        | State::CloseWait
+        | State::Closing
+        | State::LastAck = self.state
+            && between_wrapping(self.send.una, ack, self.send.nxt.wrapping_add(1))
         {
-            let ack = tcp_header.acknowledgment_number();
-
-            // TODO: I think something is weird here.
-            // What if the ack is illegal
-            if between_wrapping(self.send.una, ack, self.send.nxt.wrapping_add(1)) {
-                // let data_acked = ack.wrapping_sub(self.send.una) as usize;
-                self.send.una = ack;
-                // Remove acknowledged bytes from unacked queue
-                // if data_acked > 0 && data_acked <= self.unacked.len() {
-                //     drop(self.unacked.drain(..data_acked));
-                // }
+            let data_acked = ack.wrapping_sub(self.send.una) as usize;
+            self.send.una = ack;
+            // Remove acknowledged bytes from unacked queue
+            if data_acked > 0 && data_acked <= self.unacked.len() {
+                drop(self.unacked.drain(..data_acked));
             }
-
-            // if let State::Established = self.state {
-            //     self.tcp.fin = true;
-            //     self.closed_at = Some(self.send.una.wrapping_add(self.unacked.len() as u32));
-            //     self.state = State::FinWait1;
-            // }
+            // Update send window
+            self.send.wnd = tcp_header.window_size();
         }
 
+        // Check if our FIN has been acknowledged
         if let State::FinWait1 = self.state
             && let Some(closed_at) = self.closed_at
             && self.send.una == closed_at.wrapping_add(1)
@@ -243,46 +294,97 @@ impl Connection {
             self.state = State::FinWait2;
         }
 
+        if let State::Closing = self.state
+            && let Some(closed_at) = self.closed_at
+            && self.send.una == closed_at.wrapping_add(1)
+        {
+            self.state = State::TimeWait;
+            return Ok(self.availability());
+        }
+
+        if let State::LastAck = self.state
+            && let Some(closed_at) = self.closed_at
+            && self.send.una == closed_at.wrapping_add(1)
+        {
+            self.state = State::Closed;
+            return Ok(self.availability());
+        }
+
+        // Process payload data
+        if !payload.is_empty() {
+            match self.state {
+                State::Established | State::FinWait1 | State::FinWait2 => {
+                    // Check if this is the data we're expecting
+                    if seqn == self.recv.nxt {
+                        // In-order data, accept it
+                        self.incomming.extend(payload);
+                        self.recv.nxt = self.recv.nxt.wrapping_add(payload.len() as u32);
+                        // Send ACK for received data
+                        self.write(nic, self.send.nxt, 0)?;
+                    } else if wrapping_lt(seqn, self.recv.nxt) {
+                        // Old/duplicate data
+                        // Check if there's any new data in this segment
+                        let already_received = self.recv.nxt.wrapping_sub(seqn) as usize;
+                        if already_received < payload.len() {
+                            // Part of the segment is new data
+                            self.incomming.extend(&payload[already_received..]);
+                            self.recv.nxt = self
+                                .recv
+                                .nxt
+                                .wrapping_add((payload.len() - already_received) as u32);
+                        }
+                        // Send ACK (could be duplicate ACK if all data was old)
+                        self.write(nic, self.send.nxt, 0)?;
+                    }
+                    // else: future data, drop it (we don't have out-of-order buffering)
+                }
+                State::CloseWait | State::Closing | State::LastAck | State::TimeWait => {
+                    // Ignore data in these states
+                }
+                _ => {}
+            }
+        }
+
+        // Process FIN (must be after payload processing)
         if tcp_header.fin() {
             match self.state {
                 State::Established => {
-                    // Client is closing connection
-                    // Advance recv.nxt for the FIN
+                    // Peer is closing - advance recv.nxt for the FIN
                     self.recv.nxt = self.recv.nxt.wrapping_add(1);
                     // Send ACK for the FIN
                     self.write(nic, self.send.nxt, 0)?;
                     self.state = State::CloseWait;
                 }
-                State::FinWait2 => {
-                    // Advance recv.nxt for the FIN
+                State::FinWait1 => {
+                    // Simultaneous close
                     self.recv.nxt = self.recv.nxt.wrapping_add(1);
-                    // we're done with the connection!
+                    self.write(nic, self.send.nxt, 0)?;
+
+                    // Check if our FIN was also acknowledged
+                    if let Some(closed_at) = self.closed_at {
+                        if self.send.una == closed_at.wrapping_add(1) {
+                            // Both FINs exchanged
+                            self.state = State::TimeWait;
+                        } else {
+                            // We got FIN but our FIN not acked yet
+                            self.state = State::Closing;
+                        }
+                    }
+                }
+                State::FinWait2 => {
+                    // Normal close - peer sends FIN after we sent ours
+                    self.recv.nxt = self.recv.nxt.wrapping_add(1);
                     self.write(nic, self.send.nxt, 0)?;
                     self.state = State::TimeWait;
                 }
-                ref s => println!("{s:?}"),
+                State::CloseWait | State::Closing | State::LastAck => {
+                    // FIN already processed
+                }
+                State::TimeWait => {
+                    // Restart TIME-WAIT timer (not implemented yet)
+                }
+                _ => {}
             }
-        }
-
-        if let State::Established | State::FinWait1 | State::FinWait2 = self.state
-            && !payload.is_empty()
-        {
-            let unread = (self.recv.nxt - seqn) as usize;
-
-            // Does it really need?
-            // if unread > payload.len() {
-            //     unread = 0;
-            // }
-            self.incomming.extend(&payload[unread..]);
-
-            // Only advance recv.nxt by the amount of new data we actually consumed
-            self.recv.nxt = self
-                .recv
-                .nxt
-                .wrapping_add((payload.len() - unread) as u32)
-                .wrapping_add(if tcp_header.fin() { 1 } else { 0 });
-
-            self.write(nic, self.send.nxt, 0)?;
         }
 
         Ok(self.availability())
@@ -388,32 +490,18 @@ impl Connection {
         Ok(payload_bytes)
     }
 
-    fn send_rst(&mut self, nic: &SyncDevice) -> std::io::Result<()> {
-        self.tcp.rst = true;
-        // TODO: fix sequencee number here
-        // TODO: handle synchronized RST
-        self.tcp.sequence_number = 0;
-        self.tcp.acknowledgment_number = 0;
-        self.write(nic, self.send.nxt, 0)?;
-        // TODO: Does it needed?
-        // self.tcp.rst = false;
-        Ok(())
-    }
-
     pub(crate) fn on_tick(&mut self, nic: &SyncDevice) -> std::io::Result<()> {
         if !self.unacked.is_empty() {
             self.tcp.psh = true;
             self.write(nic, self.send.una, self.unacked.len())?;
             self.tcp.psh = false;
-            drop(self.unacked.drain(..));
-            assert!(self.unacked.is_empty());
         }
 
         if let State::CloseWait = self.state {
             self.tcp.fin = true;
             self.closed_at = Some(self.send.una.wrapping_add(self.unacked.len() as u32));
             self.write(nic, self.send.una, 0)?;
-            self.state = State::Closed;
+            self.state = State::LastAck;
         }
 
         Ok(())
