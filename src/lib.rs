@@ -197,10 +197,15 @@ impl TcpStream {
 
 impl Drop for TcpStream {
     fn drop(&mut self) {
-        let _cm = self.h.manager.lock().unwrap();
-        // TODO: send FIN packet on cm.connections[quad]
-        // if let Some(c) = cm.connection.remove(&self.quad) {
-        // }
+        let mut cm = self.h.manager.lock().unwrap();
+        if cm
+            .connection
+            .get(&self.quad)
+            .expect("connection closed before drop")
+            .is_rcv_closed()
+        {
+            cm.connection.remove(&self.quad);
+        }
     }
 }
 
