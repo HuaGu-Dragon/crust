@@ -123,14 +123,13 @@ impl Connection {
         }
 
         let iss = 0;
-        let wnd = 1024;
         let mut c = Connection {
             state: State::SynRcv,
             send: SendSequenceSpace {
                 // iss,
                 una: iss,
                 nxt: iss,
-                wnd,
+                wnd: tcp_header.window_size(),
                 // up: false,
                 // wl1: 0,
                 // wl2: 0,
@@ -146,7 +145,7 @@ impl Connection {
                 tcp_header.destination_port(),
                 tcp_header.source_port(),
                 iss, // TODO: use random sequence number
-                wnd,
+                u16::MAX,
             ),
             incomming: Default::default(),
             unacked: Default::default(),
@@ -396,6 +395,10 @@ impl Connection {
         self.tcp.sequence_number = seq;
         self.tcp.acknowledgment_number = self.recv.nxt;
 
+        // Update receive window based on available buffer space
+        let available = (u16::MAX as usize).saturating_sub(self.incomming.len());
+        self.tcp.window_size = available.min(u16::MAX as usize) as u16;
+
         let mut offset = seq.wrapping_sub(self.send.una) as usize;
 
         eprintln!(
@@ -493,7 +496,13 @@ impl Connection {
     pub(crate) fn on_tick(&mut self, nic: &SyncDevice) -> std::io::Result<()> {
         if !self.unacked.is_empty() {
             self.tcp.psh = true;
-            self.write(nic, self.send.una, self.unacked.len())?;
+            // Calculate how much we can send based on peer's window and data in flight
+            let inflight = self.send.nxt.wrapping_sub(self.send.una) as usize;
+            let available_window = (self.send.wnd as usize).saturating_sub(inflight);
+            let size = std::cmp::min(self.unacked.len(), available_window);
+            if size > 0 {
+                self.write(nic, self.send.una, size)?;
+            }
             self.tcp.psh = false;
         }
 
