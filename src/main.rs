@@ -7,13 +7,13 @@ fn main() -> Result<(), io::Error> {
     let port = 8080;
     let mut l = i.bind(port)?;
     while let Ok(mut stream) = l.accept() {
-        std::thread::spawn(move || {
+        std::thread::spawn(move || -> Result<(), io::Error> {
             println!("Got connection from {port}");
             let mut data = Vec::new();
-            writeln!(stream, "Send from Rust!").unwrap();
+            writeln!(stream, "Send from Rust!")?;
             loop {
                 let mut buf = [0; 512];
-                let n = stream.read(&mut buf).unwrap();
+                let n = stream.read(&mut buf)?;
                 if n == 0 {
                     println!("Connection Closed!");
                     break;
@@ -21,7 +21,8 @@ fn main() -> Result<(), io::Error> {
                     data.extend_from_slice(&buf[..n]);
                 }
             }
-            println!("recv: {}", String::from_utf8_lossy(&data[..]))
+            println!("recv: {}", String::from_utf8_lossy(&data[..]));
+            Ok(())
         });
     }
 
