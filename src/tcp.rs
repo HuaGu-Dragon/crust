@@ -122,7 +122,7 @@ impl Connection {
             return Ok(None);
         }
 
-        let iss = 0;
+        let iss = rand::random();
         let mut c = Connection {
             state: State::SynRcv,
             send: SendSequenceSpace {
