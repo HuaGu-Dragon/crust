@@ -56,6 +56,10 @@ fn packet_loop(ih: InterfaceHandle, nic: SyncDevice) -> std::io::Result<()> {
     let mut buf = [0u8; 1500];
 
     loop {
+        if ih.manager.lock().unwrap().terminate {
+            break Ok(());
+        }
+
         let now = Instant::now();
 
         let n = loop {
