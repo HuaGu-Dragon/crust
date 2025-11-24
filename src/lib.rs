@@ -302,8 +302,10 @@ impl Drop for TcpListener {
             .remove(&self.port)
             .expect("port closed while listener still active");
 
-        for _quad in pending {
-            // TODO: terminate all the connections
+        for quad in pending {
+            cm.connection
+                .get_mut(&quad)
+                .and_then(|con| con.close().ok());
         }
     }
 }
