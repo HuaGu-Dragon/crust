@@ -10,7 +10,6 @@ use etherparse::{IpNumber, Ipv4Header, Ipv4HeaderSlice, TcpHeader, TcpHeaderSlic
 bitflags! {
     pub(crate) struct Available: u8 {
         const READ  = 0b00000001;
-        const WRITE = 0b00000010;
     }
 
 }
